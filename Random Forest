@@ -1,0 +1,101 @@
+library(lubridate)
+library(caret)
+library(fastDummies)
+setwd('C:/UR/Communication/Round 4/New workspace')
+df<-read.csv('nyc-rolling-sales.csv')
+str(df)
+
+df$SALE.PRICE[df$SALE.PRICE==df$SALE.PRICE[2]]<-NA
+df$SALE.PRICE<-as.numeric(as.character(df$SALE.PRICE))
+df$SALE.PRICE[df$SALE.PRICE==0]<-NA
+df$TOTAL.UNITS<-as.numeric(df$TOTAL.UNITS)
+df$RESIDENTIAL.UNITS<-as.numeric(df$RESIDENTIAL.UNITS)
+df$COMMERCIAL.UNITS<-as.numeric(df$COMMERCIAL.UNITS)
+df$ADDRESS<-as.character(df$ADDRESS)
+df$APARTMENT.NUMBER<-as.character(df$APARTMENT.NUMBER)
+df$SALE.DATE<-as.Date(df$SALE.DATE)
+df$Borough<-(as.factor(df$BOROUGH))
+levels(df$Borough)<-c('Manhattan', 'Bronx', 'Brooklyn', 'Queens', 'Staten Island')
+df$Borough<-as.character(df$Borough)
+df$BOROUGH<-NULL
+df$GROSS.SQUARE.FEET[df$GROSS.SQUARE.FEET==df$GROSS.SQUARE.FEET[13]]<-NA
+df$GROSS.SQUARE.FEET<-as.numeric(as.character(df$GROSS.SQUARE.FEET))
+df$GROSS.SQUARE.FEET[df$GROSS.SQUARE.FEET==0]<-NA
+df$LAND.SQUARE.FEET<-as.numeric(df$LAND.SQUARE.FEET)
+df$TAX.CLASS.AT.PRESENT<-as.factor(df$TAX.CLASS.AT.PRESENT)
+df$TAX.CLASS.AT.TIME.OF.SALE<-as.factor(df$TAX.CLASS.AT.TIME.OF.SALE)
+#df$Month<-month(as.POSIXlt(df$SALE.DATE, format="%Y/%m/%d"))
+#df$Year<-year(as.POSIXlt(df$SALE.DATE, format="%Y/%m/%d"))
+df$YEAR.BUILT[df$YEAR.BUILT==0]<-NA
+#df$Age<-df$Year-df$YEAR.BUILT
+#df$Bulding.Class.same<-as.character(df$BUILDING.CLASS.AT.PRESENT)==
+#    as.character(df$BUILDING.CLASS.AT.TIME.OF.SALE)
+df$ZIP.CODE<-as.factor(df$ZIP.CODE)
+df$Unit.Rate<-df$SALE.PRICE/df$GROSS.SQUARE.FEET
+df$EASE.MENT<-NULL
+dfAllSales<-df[!is.na(df$Unit.Rate),]
+write.csv(dfAllSales,file='AllSales.csv')
+
+
+##------Clean df
+
+BC<-aggregate(formula=Unit.Rate~BUILDING.CLASS.CATEGORY, data=dfAllSales,FUN=length)
+names(BC)<-c('BUILDING.CLASS.CATEGORY','Number')
+ListBC<-BC$BUILDING.CLASS.CATEGORY[BC$Number>=500]
+#ListBC<-ListBC[1:7] 
+df3<-dfAllSales[dfAllSales$BUILDING.CLASS.CATEGORY %in% ListBC,]##Building Class filtering
+df3<-na.omit(df3)
+write.csv(df3,file='NoNAs.csv')
+
+
+##---Sampling getting address
+
+set.seed(2018)
+sampler<-sample(1:nrow(df3),9000)
+dfgettingaddress<-df3[sampler,-9]
+write.csv(dfgettingaddress,file='getting address.csv')
+
+##----Google API
+geocodeAdddress <- function(address) {
+    address<-strsplit(address,' ')[[1]]
+    address<-paste(address,collapse = '+')
+    require(RJSONIO)
+    url <- "https://maps.googleapis.com/maps/api/geocode/json?address="
+    url <- URLencode(paste(url, address,'New','York', 
+                           "&key=AIzaSyCUwkZ7_EXb8Kav0rRJViLPHmfBVxIzO6Q", collapse  = "+"))
+    x <- fromJSON(url, simplify = FALSE)
+    if (x$status == "OK") {
+        out <- c(x$results[[1]]$geometry$location$lng,
+                 x$results[[1]]$geometry$location$lat,
+                 x$results[[1]]$types,
+                 x$results[[1]]$formatted_address)
+    } 
+    else {
+        out <- c(NA,NA,NA,NA)
+    }
+#    Sys.sleep(0.1)  # API only allows 5 requests per second
+    return(out)
+}
+
+dfgettingaddress$lng<-0
+dfgettingaddress$lan<-0
+dfgettingaddress$types<-as.character(0)
+dfgettingaddress$AccurateAddress<-as.character(0)
+
+for (i in 2304:9000){
+    result<-geocodeAdddress(dfgettingaddress$ADDRESS[i])
+    dfgettingaddress$lng[i]<-result[[1]]
+    dfgettingaddress$lan[i]<-result[[2]]
+    dfgettingaddress$types[i]<-result[[3]]
+    dfgettingaddress$AccurateAddress[i]<-result[4]
+}
+x<-geocodeAdddress(dfgettingaddress$ADDRESS[10])
+dfgettingaddress$lng[10]<-x[[1]]
+dfgettingaddress[2300,]
+
+##------RF now!-----
+RF <- ranger(Unit.Rate~ ., data=na.omit(df[,c(-1,-7,-9,-16,-20)]),
+             write.forest=TRUE,num.tree=500, min.node.size=5, 
+             importance="impurity") # Estimate a random forest
+RF # Report results
+sort(RF$variable.importance, decreasing=TRUE) # Show variable importance
