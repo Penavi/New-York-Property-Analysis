@@ -1,0 +1,170 @@
+library(lubridate)
+library(caret)
+library(fastDummies)
+setwd('C:/UR/Communication/Round 4/New workspace')
+df<-read.csv('nyc-rolling-sales.csv')
+str(df)
+df$SALE.PRICE[df$SALE.PRICE==df$SALE.PRICE[2]]<-NA
+df$SALE.PRICE<-as.numeric(as.character(df$SALE.PRICE))
+df$SALE.PRICE[df$SALE.PRICE==0]<-NA
+df$TOTAL.UNITS<-as.numeric(df$TOTAL.UNITS)
+df$RESIDENTIAL.UNITS<-as.numeric(df$RESIDENTIAL.UNITS)
+df$COMMERCIAL.UNITS<-as.numeric(df$COMMERCIAL.UNITS)
+df$ADDRESS<-as.character(df$ADDRESS)
+df$APARTMENT.NUMBER<-as.character(df$APARTMENT.NUMBER)
+df$SALE.DATE<-as.Date(df$SALE.DATE)
+df$Borough<-(as.factor(df$BOROUGH))
+levels(df$Borough)<-c('Manhattan', 'Bronx', 'Brooklyn', 'Queens', 'Staten Island')
+df$Borough<-as.character(df$Borough)
+df$GROSS.SQUARE.FEET[df$GROSS.SQUARE.FEET==df$GROSS.SQUARE.FEET[13]]<-NA
+df$GROSS.SQUARE.FEET<-as.numeric(as.character(df$GROSS.SQUARE.FEET))
+df$GROSS.SQUARE.FEET[df$GROSS.SQUARE.FEET==0]<-NA
+#df$Month<-month(as.POSIXlt(df$SALE.DATE, format="%Y/%m/%d"))
+#df$Year<-year(as.POSIXlt(df$SALE.DATE, format="%Y/%m/%d"))
+df$YEAR.BUILT[df$YEAR.BUILT==0]<-NA
+#df$Age<-df$Year-df$YEAR.BUILT
+df$BOROUGH<-NULL
+#df$Bulding.Class.same<-as.character(df$BUILDING.CLASS.AT.PRESENT)==
+#    as.character(df$BUILDING.CLASS.AT.TIME.OF.SALE)
+df$ZIP.CODE<-as.factor(df$ZIP.CODE)
+df$Unit.Rate<-df$SALE.PRICE/df$GROSS.SQUARE.FEET
+##------RF now!-----
+RF <- ranger(Unit.Rate~ ., data=na.omit(df[,c(-1,-7,-9,-16,-20)]),
+             write.forest=TRUE,num.tree=500, min.node.size=5, 
+             importance="impurity") # Estimate a random forest
+RF # Report results
+sort(RF$variable.importance, decreasing=TRUE) # Show variable importance
+
+##--------Make new index
+df$withUnitRate<-(df$GROSS.SQUARE.FEET>0)&(df$SALE.PRICE>0)&!is.na(df$GROSS.SQUARE.FEET)&!is.na(df$SALE.PRICE)
+df$Unit.Rate<-df$SALE.PRICE/df$GROSS.SQUARE.FEET
+Index<-aggregate(Unit.Rate~Month+Year , data=df[df$withUnitRate==T,], function(x) {mean(x, na.rm = T)})
+Ref<-Index[1,2]
+for (i in 1:nrow(df)){
+    df$Unit.Rate.Adjusted[i]<-
+        df$Unit.Rate[i]*(Ref/Index$Unit.Rate[Index$Month==df$Month[i]
+                                                         & Index$Year==df$Year[i]])
+}
+df$Unit.Rate[df$withUnitRate==F]<-NA
+df$Unit.Rate.Adjusted[df$withUnitRate==F]<-NA
+write.csv(df,file='withUnitRate.csv')
+
+##------Building Class
+df<-read.csv('withUnitRate.csv')
+BC<-aggregate(formula=Unit.Rate~BUILDING.CLASS.CATEGORY, data=df,FUN=length)
+names(BC)<-c('BUILDING.CLASS.CATEGORY','Number')
+BC$Percentage<-BC$Number/sum(BC$Number)*100
+ListBC<-BC$BUILDING.CLASS.CATEGORY[BC$Percentage>=0.1]
+ListBC<-ListBC[1:7]
+df2<-df[df$BUILDING.CLASS.CATEGORY %in% ListBC,]
+df2$BUILDING.CLASS.CATEGORY<-as.character(df2$BUILDING.CLASS.CATEGORY)
+write.csv(df2,file='df2.csv')
+
+##------Subsetting and Dummy
+
+df3<-na.omit(df2[df2$withUnitRate==T,c( "ADDRESS" ,
+               "Borough",
+                "Unit.Rate.Adjusted",
+                "Age",
+#                "Land.Square.Feet",
+                "BUILDING.CLASS.CATEGORY"
+               )])
+write.csv(df3, file = "before dummy.csv")
+df4<-dummy_cols(df3, select_columns = c('Borough','BUILDING.CLASS.CATEGORY'))
+
+##-----Dummy adjustment
+df4$Borough<-NULL
+df4$BUILDING.CLASS.CATEGORY<-NULL
+df4$'15 CONDOS - 2-10 UNIT RESIDENTIAL'<-NULL
+df4$`Borough_Staten Island`<-NULL
+df4$`Building.Class.Category_10 COOPS - ELEVATOR APARTMENTS`<-NULL
+str(df4)
+
+##-----save df4
+write.csv(df4, file = "with dummy.csv")
+
+##----read df4
+setwd('C:/UR/Communication/Round 4')
+df4<-read.csv("with dummy.csv")
+
+##---sampling for Machine Learning
+set.seed(3478)
+sampler<-sample(1:nrow(df4),nrow(df4)*0.667)
+dfLM<-df4[,-1]
+train<-df4[sampler,-1] #delete adddress
+test<-df4[-sampler,-1] 
+write.csv(train, file = "train.csv")
+write.csv(test, file = "test.csv")
+write.csv(dfLM, file='LinearRegression.csv')
+
+RF <- ranger(Unit.Rate.Adjusted~ ., data=df3[,-1],write.forest=TRUE, 
+             num.tree=500, min.node.size=5, importance="impurity") # Estimate a random forest
+
+##----Linear Regression
+train$X<-NULL
+train$Address<-NULL
+LM<-lm(formula=UnitRateAdjusted~.,train)
+summary(LM)
+
+test$predict <- predict(LM, test)
+tab<-table(test$predict,test$UnitRateAdjusted)
+confusionMatrix(test$predict,test$UnitRateAdjusted)
+
+
+##-----Temp work
+
+for (i in 1:length(levels(df$Building.Class))){
+    BC<-levels(df$Building.Class)[i]
+    Num<-length(df)
+    df[,Num+i]<-df$Building.Class==BC
+    names(df)<-c(colnames(df)[1:Num+i-1],BC)
+}
+
+##------Finish
+write.csv(df, file = "nyc-rolling-sales v2.csv")
+
+##-------------
+setwd('C:/UR/Communication/Round 4')
+df<-read.csv('nyc-rolling-sales.csv')
+df$Borough<-as.factor(df$BOROUGH)
+levels(df$Borough)<-c('Manhattan', 'Bronx', 'Brooklyn', 'Queens', 'Staten Island')
+df$Borough<-as.character(df$Borough)
+write.csv(df,file="nyc-rolling-sales.csv")
+
+df_new<-merge(df, df_Index, 
+              by.x=quarter('SALE.DATE',with_year = T), 
+              by.y=quarter('DATE',with_year = T),
+              all.x=all)
+
+temp_series<-df$ZIP.CODE
+for (i in 1:nrow(df)){
+    df$Index[i]<-df_Index$NYSTHPI[(quarter(df_Index$DATE)==quarter(df$SALE.DATE[i]))&
+                                      (year(df_Index$DATE)==year(df$SALE.DATE[i]))]
+}
+
+df$APARTMENT.NUMBER[20]
+J<-strsplit(df$ADDRESS[20],',')[[1]][2]
+!is.null(j)
+j
+typeof(df$GROSS.SQUARE.FEET[100])
+as.numeric(df$GROSS.SQUARE.FEET[100])
+df$SALE.DATE<-as.Date(df$SALE.DATE)
+df$PRICE.PER.SQF<-df$SALE.PRICE/df$GROSS.SQUARE.FEET
+str(df)
+
+Manhattan (1), Bronx (2), Brooklyn (3), Queens (4), and Staten Island (5)
+
+ADDRESS.BOOK<-unique(df$ADDRESS)
+for (i in 33244:length(ADDRESS.BOOK)){
+    temp_series<-df[df$ADDRESS==ADDRESS.BOOK[i],]$GROSS.SQUARE.FEET
+    if (length(temp_series)>1) {
+        sqf<-max(temp_series)
+        df[df$ADDRESS==ADDRESS.BOOK[i],]$GROSS.SQUARE.FEET<-sqf
+    }
+}
+sqf<-max(df[df$ADDRESS==ADDRESS.BOOK[1],]$GROSS.SQUARE.FEET)
+df[df$ADDRESS==ADDRESS.BOOK[1],]$GROSS.SQUARE.FEET
+sqf<-max(df[df$ADDRESS==ADDRESS.BOOK[i],]$GROSS.SQUARE.FEET)
+df[df$ADDRESS==ADDRESS.BOOK[i],]$GROSS.SQUARE.FEET<-sqf
+sqf
+
