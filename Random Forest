@@ -1,10 +1,11 @@
 library(lubridate)
 library(caret)
 library(fastDummies)
-setwd('C:/UR/Communication/Round 4/New workspace')
+setwd(setwd)
 df<-read.csv('nyc-rolling-sales.csv')
 str(df)
 
+##------Clean df
 df$SALE.PRICE[df$SALE.PRICE==df$SALE.PRICE[2]]<-NA
 df$SALE.PRICE<-as.numeric(as.character(df$SALE.PRICE))
 df$SALE.PRICE[df$SALE.PRICE==0]<-NA
@@ -36,9 +37,6 @@ df$EASE.MENT<-NULL
 dfAllSales<-df[!is.na(df$Unit.Rate),]
 write.csv(dfAllSales,file='AllSales.csv')
 
-
-##------Clean df
-
 BC<-aggregate(formula=Unit.Rate~BUILDING.CLASS.CATEGORY, data=dfAllSales,FUN=length)
 names(BC)<-c('BUILDING.CLASS.CATEGORY','Number')
 ListBC<-BC$BUILDING.CLASS.CATEGORY[BC$Number>=500]
@@ -46,7 +44,6 @@ ListBC<-BC$BUILDING.CLASS.CATEGORY[BC$Number>=500]
 df3<-dfAllSales[dfAllSales$BUILDING.CLASS.CATEGORY %in% ListBC,]##Building Class filtering
 df3<-na.omit(df3)
 write.csv(df3,file='NoNAs.csv')
-
 
 ##---Sampling getting address
 
@@ -62,7 +59,7 @@ geocodeAdddress <- function(address) {
     require(RJSONIO)
     url <- "https://maps.googleapis.com/maps/api/geocode/json?address="
     url <- URLencode(paste(url, address,'New','York', 
-                           "&key=AIzaSyCUwkZ7_EXb8Kav0rRJViLPHmfBVxIzO6Q", collapse  = "+"))
+                           "&key=your own key", collapse  = "+"))
     x <- fromJSON(url, simplify = FALSE)
     if (x$status == "OK") {
         out <- c(x$results[[1]]$geometry$location$lng,
